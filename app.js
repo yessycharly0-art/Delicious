@@ -223,6 +223,10 @@
     return `<div class="scoop ${f.sw}" style="${styleAttr||''}"></div>`;
   }
   function cartTotalQty(){ return S.cart.reduce((a,c) => a + c.qty, 0); }
+  // Cuánto de un sabor ya está en el carrito (para no dejar agregar más de lo que hay en stock)
+  function cartQtyForFlavor(flavorId){
+    return S.cart.reduce((sum,c) => c.flavorId === flavorId ? sum + c.qty : sum, 0);
+  }
   function cartSubtotal(){
     return S.cart.reduce((sum,c) => {
       const f = flavorById(c.flavorId);
@@ -475,9 +479,12 @@
   function viewDetail(){
     const f = flavorById(S.selectedFlavorId) || FLAVORS[0];
     const mult = SIZES.find(s => s.label === S.selectedSize)?.mult || 1;
+    const alreadyInCart = cartQtyForFlavor(f.id);
+    const available = Math.max(0, f.stock - alreadyInCart);
     const linePrice = f.price * mult * S.selectedQty;
-    const outOfStock = f.stock <= 0;
-    if(S.selectedQty > f.stock && f.stock > 0) S.selectedQty = f.stock;
+    const outOfStock = available <= 0;
+    if(S.selectedQty > available && available > 0) S.selectedQty = available;
+    if(available <= 0) S.selectedQty = 1;
     return `
     ${navbar('menu')}
     <div class="page-content">
@@ -501,10 +508,11 @@
               <div class="stepper">
                 <button data-qty="-1" ${outOfStock?'disabled':''}>${I.minus}</button>
                 <span class="qty">${S.selectedQty}</span>
-                <button data-qty="1" ${(outOfStock || S.selectedQty>=f.stock)?'disabled':''}>${I.plus}</button>
+                <button data-qty="1" ${(outOfStock || S.selectedQty>=available)?'disabled':''}>${I.plus}</button>
               </div>
             </div>
-            <button class="btn btn-primary" style="margin-top:34px; padding:15px 32px;" id="add-to-cart" ${outOfStock?'disabled':''}>${outOfStock ? 'Agotado' : `Agregar al carrito · ${money(linePrice)}`}</button>
+            ${alreadyInCart > 0 ? `<p class="muted" style="font-size:12px; margin-top:6px;">Ya tienes ${alreadyInCart} en tu carrito${available>0 ? ` · quedan ${available} disponibles` : ' · ¡es todo el inventario disponible!'}</p>` : ''}
+            <button class="btn btn-primary" style="margin-top:34px; padding:15px 32px;" id="add-to-cart" ${outOfStock?'disabled':''}>${outOfStock ? 'Sin inventario disponible' : `Agregar al carrito · ${money(linePrice)}`}</button>
           </div>
         </div>
       </div>
@@ -809,7 +817,9 @@
       el.addEventListener('click', () => {
         const d = parseInt(el.dataset.qty, 10);
         const f = flavorById(S.selectedFlavorId);
-        const max = Math.min(9, f ? f.stock : 9);
+        const available = f ? Math.max(0, f.stock - cartQtyForFlavor(f.id)) : 9;
+        const max = Math.min(9, available);
+        if(max <= 0) return; // no hay más inventario disponible para este sabor
         S.selectedQty = Math.max(1, Math.min(max, S.selectedQty + d));
         render();
       });
@@ -817,8 +827,16 @@
 
     const addBtn = document.getElementById('add-to-cart');
     if(addBtn) addBtn.addEventListener('click', () => {
-      S.cart.push({ flavorId:S.selectedFlavorId, size:S.selectedSize, qty:S.selectedQty });
-      toast('Agregado al carrito');
+      const f = flavorById(S.selectedFlavorId);
+      const available = f ? Math.max(0, f.stock - cartQtyForFlavor(f.id)) : 0;
+      if(!f || available <= 0){
+        toast('Ya no hay inventario disponible de este sabor.');
+        render();
+        return;
+      }
+      const qtyToAdd = Math.min(S.selectedQty, available);
+      S.cart.push({ flavorId:S.selectedFlavorId, size:S.selectedSize, qty:qtyToAdd });
+      toast(qtyToAdd < S.selectedQty ? `Solo agregamos ${qtyToAdd}, es el inventario disponible` : 'Agregado al carrito');
       goTo(S.prevView === 'home' ? 'home' : 'menu');
     });
 
@@ -835,6 +853,46 @@
 
     const checkoutBtn = document.getElementById('checkout-btn');
     if(checkoutBtn) checkoutBtn.addEventListener('click', async () => {
+      if(S.cart.length === 0) return;
+      checkoutBtn.disabled = true;
+      checkoutBtn.textContent = 'Verificando inventario...';
+
+      // Traemos el stock más reciente antes de confirmar, por si alguien más compró
+      // el mismo sabor mientras el carrito estaba abierto.
+      if(appwriteReady){
+        try{ await loadFlavorsFromAppwrite(); }catch(e){ /* seguimos con los datos locales */ }
+      }
+
+      // Sumamos lo pedido por sabor y lo comparamos contra el stock real disponible.
+      const neededByFlavor = {};
+      S.cart.forEach(c => { neededByFlavor[c.flavorId] = (neededByFlavor[c.flavorId]||0) + c.qty; });
+
+      const shortages = [];
+      for(const flavorId in neededByFlavor){
+        const f = flavorById(flavorId);
+        const stock = f ? f.stock : 0;
+        if(stock < neededByFlavor[flavorId]){
+          shortages.push({ flavorId, name: f ? f.name : 'este sabor', stock });
+        }
+      }
+
+      if(shortages.length){
+        // Ajustamos el carrito a lo que realmente hay disponible en vez de dejar pasar el pedido.
+        shortages.forEach(({flavorId, stock}) => {
+          let remaining = stock;
+          S.cart = S.cart.map(c => {
+            if(c.flavorId !== flavorId) return c;
+            const take = Math.min(c.qty, remaining);
+            remaining -= take;
+            return { ...c, qty: take };
+          }).filter(c => c.qty > 0);
+        });
+        const names = shortages.map(s => s.stock > 0 ? `${s.name} (quedan ${s.stock})` : `${s.name} (agotado)`).join(', ');
+        toast('No había suficiente inventario de: ' + names + '. Ajustamos tu carrito.');
+        render();
+        return;
+      }
+
       const total = cartSubtotal() + DELIVERY_FEE;
       const qty = cartTotalQty();
       const itemsText = S.cart.map(c => flavorById(c.flavorId).name).join(', ');
