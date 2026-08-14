@@ -269,10 +269,19 @@ p{ margin:0; }
 .profile-row .label svg{ width:18px; height:18px; color:var(--berry); }
 .profile-row .chev{ color:var(--muted); }
 .profile-main{ flex:1; }
-.stat-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:20px; }
+.stat-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:20px; }
 .stat-card{ text-align:center; }
 .stat-card .num{ font-size:26px; font-weight:700; color:var(--berry-dark); font-family:'Fraunces', serif; font-style:italic; }
 .stat-card .lbl{ color:var(--muted); font-size:12.5px; margin-top:4px; }
+
+/* ---------- Reporte semanal (admin) ---------- */
+.report-head{ display:flex; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; gap:10px; }
+.week-chart{ display:flex; align-items:flex-end; gap:14px; height:180px; padding-top:10px; }
+.week-bar-col{ flex:1; display:flex; flex-direction:column; align-items:center; height:100%; }
+.week-bar-track{ flex:1; width:100%; max-width:38px; display:flex; align-items:flex-end; }
+.week-bar{ width:100%; background:linear-gradient(180deg, var(--berry), var(--berry-dark)); border-radius:8px 8px 3px 3px; transition:height .3s ease; min-height:4px; }
+.week-bar-val{ font-size:10.5px; color:var(--muted); margin-top:8px; white-space:nowrap; }
+.week-bar-label{ font-size:12px; font-weight:700; color:var(--plum); margin-top:2px; }
 
 /* ---------- Orders ---------- */
 .tabs{ display:flex; gap:28px; margin-bottom:26px; border-bottom:1px solid var(--line); }

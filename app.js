@@ -75,6 +75,7 @@
       S.orders = res.rows.map(row => ({
         id: row.$id,
         date: new Date(row.$createdAt).toLocaleDateString('es-MX'),
+        createdAt: row.$createdAt,
         itemsText: row.itemsText,
         qty: row.qty,
         total: row.total,
@@ -204,6 +205,50 @@
   };
 
   function money(n){ return '$' + n.toFixed(2); }
+
+  // ---------------- REPORTES: semana actual (lunes a domingo) ----------------
+  const WEEKDAY_LABELS = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+  function startOfWeek(d = new Date()){
+    const date = new Date(d);
+    const day = date.getDay(); // 0=domingo ... 6=sábado
+    const diffToMonday = day === 0 ? 6 : day - 1;
+    date.setHours(0,0,0,0);
+    date.setDate(date.getDate() - diffToMonday);
+    return date;
+  }
+  function orderDate(o){
+    // createdAt es el timestamp real (ISO). Si un pedido viejo no lo tiene, cae fuera del reporte.
+    return o.createdAt ? new Date(o.createdAt) : null;
+  }
+  function ordersThisWeek(){
+    const start = startOfWeek();
+    return S.orders.filter(o => {
+      const d = orderDate(o);
+      return d && d >= start;
+    });
+  }
+  function weeklyStats(){
+    const weekOrders = ordersThisWeek();
+    const validOrders = weekOrders.filter(o => o.statusLabel !== 'Cancelado');
+    const earnings = validOrders.reduce((sum,o) => sum + o.total, 0);
+    const itemsSold = validOrders.reduce((sum,o) => sum + o.qty, 0);
+    const byDay = WEEKDAY_LABELS.map(() => 0);
+    validOrders.forEach(o => {
+      const d = orderDate(o);
+      if(!d) return;
+      const idx = d.getDay() === 0 ? 6 : d.getDay() - 1; // lunes=0 ... domingo=6
+      byDay[idx] += o.total;
+    });
+    return {
+      weekOrders,
+      validOrders,
+      earnings,
+      itemsSold,
+      orderCount: weekOrders.length,
+      cancelledCount: weekOrders.length - validOrders.length,
+      byDay,
+    };
+  }
   function initials(name){
     const p = String(name||'?').trim().split(/\s+/);
     return ((p[0]?.[0]||'') + (p[1]?.[0]||'')).toUpperCase() || '?';
@@ -714,6 +759,23 @@
         </td>
       </tr>`).join('') : `<tr><td colspan="7" class="muted" style="text-align:center; padding:24px;">${S.orders.length ? 'No hay pedidos con este estado.' : 'Todavía no hay pedidos registrados en esta sesión.'}</td></tr>`;
 
+    // ---- Reporte semanal ----
+    const stats = weeklyStats();
+    const weekStart = startOfWeek();
+    const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate()+6);
+    const fmtShort = (d) => d.toLocaleDateString('es-MX', {day:'numeric', month:'short'});
+    const maxDay = Math.max(1, ...stats.byDay);
+    const weekOrdersSorted = [...stats.weekOrders].sort((a,b) => (orderDate(b)||0) - (orderDate(a)||0));
+    const weekRows = weekOrdersSorted.length ? weekOrdersSorted.map(o => `
+      <tr>
+        <td><b>#${o.id}</b></td>
+        <td class="muted">${orderDate(o) ? orderDate(o).toLocaleDateString('es-MX',{weekday:'short', day:'numeric', month:'short'}) : o.date}</td>
+        <td>${o.itemsText}</td>
+        <td>${o.qty}</td>
+        <td>${money(o.total)}</td>
+        <td><span class="order-status ${o.statusLabel==='Entregado'?'delivered':o.statusLabel==='Cancelado'?'cancelled':'processing'}">${o.statusLabel}</span></td>
+      </tr>`).join('') : `<tr><td colspan="6" class="muted" style="text-align:center; padding:24px;">Todavía no hay pedidos esta semana.</td></tr>`;
+
     return `
     ${navbar('admin')}
     <div class="page-content">
@@ -723,6 +785,7 @@
         <div class="tabs">
           <div class="tab ${S.adminTab==='sabores'?'active':''}" data-admintab="sabores">Sabores</div>
           <div class="tab ${S.adminTab==='pedidos'?'active':''}" data-admintab="pedidos">Pedidos</div>
+          <div class="tab ${S.adminTab==='reportes'?'active':''}" data-admintab="reportes">Reportes</div>
         </div>
 
         ${S.adminTab === 'sabores' ? `
@@ -772,7 +835,7 @@
               <tbody>${rows}</tbody>
             </table>
           </div>
-        ` : `
+        ` : S.adminTab === 'pedidos' ? `
           <div class="card" style="margin-top:20px;">
             <h3 style="font-size:15.5px; margin-bottom:16px;">Pedidos de esta sesión (${S.orders.length})</h3>
             <div class="tabs" style="margin-bottom:6px;">
@@ -781,6 +844,41 @@
             <table>
               <thead><tr><th>Pedido</th><th>Fecha</th><th>Artículos</th><th>Cant.</th><th>Total</th><th>Pago</th><th>Estado</th></tr></thead>
               <tbody>${ordersRows}</tbody>
+            </table>
+          </div>
+        ` : `
+          <div class="report-head" style="margin-top:20px;">
+            <div>
+              <h3 style="font-size:15.5px;">Reporte de la semana</h3>
+              <p class="muted" style="font-size:12.5px;">${fmtShort(weekStart)} — ${fmtShort(weekEnd)}</p>
+            </div>
+          </div>
+          <div class="stat-grid" style="margin-top:14px;">
+            <div class="stat-card"><div class="num" style="color:var(--berry-dark);">${money(stats.earnings)}</div><div class="lbl">Ganancia de la semana</div></div>
+            <div class="stat-card"><div class="num">${stats.orderCount}</div><div class="lbl">Pedidos recibidos</div></div>
+            <div class="stat-card"><div class="num">${stats.itemsSold}</div><div class="lbl">Postres vendidos</div></div>
+            <div class="stat-card"><div class="num">${stats.cancelledCount}</div><div class="lbl">Pedidos cancelados</div></div>
+          </div>
+
+          <div class="card" style="margin-top:20px;">
+            <h3 style="font-size:15.5px; margin-bottom:18px;">Ganancia por día</h3>
+            <div class="week-chart">
+              ${stats.byDay.map((val, i) => `
+                <div class="week-bar-col">
+                  <div class="week-bar-track">
+                    <div class="week-bar" style="height:${Math.max(4, (val/maxDay)*100)}%;" title="${money(val)}"></div>
+                  </div>
+                  <div class="week-bar-val">${val > 0 ? money(val) : '—'}</div>
+                  <div class="week-bar-label">${WEEKDAY_LABELS[i]}</div>
+                </div>`).join('')}
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:20px;">
+            <h3 style="font-size:15.5px; margin-bottom:16px;">Pedidos de esta semana (${stats.weekOrders.length})</h3>
+            <table>
+              <thead><tr><th>Pedido</th><th>Fecha</th><th>Artículos</th><th>Cant.</th><th>Total</th><th>Estado</th></tr></thead>
+              <tbody>${weekRows}</tbody>
             </table>
           </div>
         `}
@@ -975,6 +1073,7 @@
       S.orders.unshift({
         id: savedRow ? savedRow.$id : String(1000 + S.orders.length + 1),
         date: 'Hoy',
+        createdAt: savedRow ? savedRow.$createdAt : new Date().toISOString(),
         ...orderData,
       });
       S.cart = [];
