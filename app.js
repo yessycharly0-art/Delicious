@@ -168,6 +168,7 @@
   const SIZES = [ {label:'Chico', mult:0.85}, {label:'Mediano', mult:1}, {label:'Grande', mult:1.3} ];
   const PAYMENT_METHODS = ['Efectivo','Tarjeta','Transferencia'];
   const DELIVERY_FEE = 3.00;
+  const LOW_STOCK_THRESHOLD = 5; // mismo umbral que ya usa el badge "¡Últimas N!"
   const ADMIN_EMAILS = [
     'estefaniayesenia02@gmail.com',
     '223112129@upmh.edu.mx',
@@ -198,6 +199,8 @@
     showFlavorForm: false,
     editingFlavor: null,
     flavorFormError: '',
+    notifOpen: false,
+    lastLowStockKey: null,
   };
 
   function money(n){ return '$' + n.toFixed(2); }
@@ -206,6 +209,25 @@
     return ((p[0]?.[0]||'') + (p[1]?.[0]||'')).toUpperCase() || '?';
   }
   function flavorById(id){ return FLAVORS.find(f => f.id === id); }
+  // Productos agotados o con pocas unidades (stock <= LOW_STOCK_THRESHOLD)
+  function lowStockFlavors(){
+    return FLAVORS.filter(f => f.stock <= LOW_STOCK_THRESHOLD).sort((a,b) => a.stock - b.stock);
+  }
+  // Avisa al admin (dentro de la app) cuando cambia el conjunto de productos con poco inventario.
+  // No hay backend de correo/push configurado en este proyecto, así que la notificación
+  // vive en la campanita de la barra de navegación y aparece como toast cuando el admin
+  // está usando la app.
+  function maybeNotifyAdminLowStock(){
+    if(!isAdmin()) return;
+    const items = lowStockFlavors();
+    const key = items.map(f => f.id + ':' + f.stock).join('|');
+    if(key === S.lastLowStockKey) return;
+    S.lastLowStockKey = key;
+    if(items.length === 0) return;
+    const names = items.slice(0,3).map(f => f.stock<=0 ? `${f.name} (agotado)` : `${f.name} (${f.stock})`).join(', ');
+    const extra = items.length > 3 ? ` y ${items.length - 3} más` : '';
+    toast(`⚠️ Inventario bajo: ${names}${extra}`);
+  }
   function paymentIcon(method){
     if(method === 'Efectivo') return I.cash;
     if(method === 'Tarjeta') return I.cardpay;
@@ -257,6 +279,7 @@
       ...(isAdmin() ? [{v:'admin', icon:I.settings, label:'Admin'}] : []),
       {v:'profile', icon:I.user, label:'Perfil'},
     ];
+    const lowStock = isAdmin() ? lowStockFlavors() : [];
     return `
     <div class="navbar">
       <div class="logo display" data-goto="home">Delicious</div>
@@ -264,6 +287,22 @@
         ${items.map(it => `<div class="nav-link ${active===it.v?'active':''}" data-goto="${it.v}">${it.icon}<span>${it.label}</span></div>`).join('')}
       </div>
       <div class="nav-right">
+        ${isAdmin() ? `
+        <div style="position:relative;">
+          <div class="icon-btn" id="notif-bell-btn" style="position:relative;">
+            ${I.bell}
+            ${lowStock.length ? `<span class="nav-badge">${lowStock.length}</span>` : ''}
+          </div>
+          ${S.notifOpen ? `
+          <div class="notif-dropdown">
+            <div class="notif-dropdown-head">Inventario bajo</div>
+            ${lowStock.length === 0 ? `<div class="notif-empty">Todo el inventario está en buen nivel 🎉</div>` : lowStock.map(f => `
+              <div class="notif-row" data-notif-flavor="${f.id}">
+                <span class="notif-name">${f.name}</span>
+                <span class="stock-badge ${f.stock<=0?'out':'low'}">${f.stock<=0 ? 'Agotado' : `Quedan ${f.stock}`}</span>
+              </div>`).join('')}
+          </div>` : ''}
+        </div>` : ''}
         <div class="icon-btn" style="position:relative;" data-goto="cart">
           ${I.cart}
           ${cartTotalQty() ? `<span class="nav-badge">${cartTotalQty()}</span>` : ''}
@@ -771,6 +810,7 @@
     }
     root.innerHTML = html;
     attach();
+    maybeNotifyAdminLowStock();
   }
 
   // ---------------- EVENT WIRING ----------------
@@ -796,6 +836,24 @@
       e.stopPropagation();
       S.landingMenuOpen = !S.landingMenuOpen;
       render();
+    });
+
+    const notifBell = document.getElementById('notif-bell-btn');
+    if(notifBell) notifBell.addEventListener('click', (e) => {
+      e.stopPropagation();
+      S.notifOpen = !S.notifOpen;
+      render();
+    });
+
+    root.querySelectorAll('[data-notif-flavor]').forEach(el => {
+      el.addEventListener('click', () => {
+        S.notifOpen = false;
+        S.adminTab = 'sabores';
+        S.editingFlavor = flavorById(el.dataset.notifFlavor);
+        S.flavorFormError = '';
+        S.showFlavorForm = true;
+        goTo('admin');
+      });
     });
 
     root.querySelectorAll('[data-detail]').forEach(el => {
@@ -1232,6 +1290,12 @@
   // ---------------- STARTUP ----------------
   async function init(){
     initChatWidget();
+    document.addEventListener('click', (e) => {
+      if(S.notifOpen && !e.target.closest('#notif-bell-btn') && !e.target.closest('.notif-dropdown')){
+        S.notifOpen = false;
+        render();
+      }
+    });
     await Promise.all([ restoreSession(), loadFlavorsFromAppwrite(), loadOrdersFromAppwrite() ]);
     render();
   }
