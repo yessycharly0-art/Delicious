@@ -74,11 +74,12 @@ p{ margin:0; }
 /* ---------- Inputs ---------- */
 .field{ display:flex; flex-direction:column; gap:6px; margin-bottom:18px; }
 .field label{ font-size:11.5px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
-.field input, .field select{
+.field input, .field select, .field textarea{
   font-family:'Poppins', sans-serif; font-size:14.5px; padding:13px 15px;
   border:1.5px solid var(--line); border-radius:var(--radius-sm); background:var(--paper); color:var(--plum); outline:none;
 }
-.field input:focus{ border-color:var(--berry); }
+.field textarea{ resize:vertical; min-height:90px; font-family:'Poppins', sans-serif; }
+.field input:focus, .field textarea:focus{ border-color:var(--berry); }
 .field input::placeholder{ color:#C7B6BD; }
 .error-text{ color:var(--berry-dark); font-size:12.5px; margin:-10px 0 14px 0; }
 
@@ -282,6 +283,28 @@ p{ margin:0; }
 .week-bar{ width:100%; background:linear-gradient(180deg, var(--berry), var(--berry-dark)); border-radius:8px 8px 3px 3px; transition:height .3s ease; min-height:4px; }
 .week-bar-val{ font-size:10.5px; color:var(--muted); margin-top:8px; white-space:nowrap; }
 .week-bar-label{ font-size:12px; font-weight:700; color:var(--plum); margin-top:2px; }
+
+/* ---------- Centro de ayuda / reportes ---------- */
+.faq-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:14px; }
+.faq-card{ padding:16px 18px; }
+.faq-card .q{ font-weight:700; font-size:13.5px; color:var(--berry-dark); margin-bottom:6px; }
+.faq-card .a{ font-size:13px; color:var(--muted); line-height:1.5; }
+.agent-reply{
+  margin-top:16px; padding:16px 18px; border-radius:var(--radius-sm); background:var(--soft-pink);
+  border:1px solid var(--line); display:flex; gap:12px; align-items:flex-start;
+}
+.agent-reply .badge-ico{
+  width:34px; height:34px; border-radius:50%; background:var(--berry); color:#fff; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center; font-size:15px;
+}
+.agent-reply .body{ flex:1; }
+.agent-reply .title{ font-weight:700; font-size:13px; color:var(--berry-dark); margin-bottom:4px; }
+.agent-reply .text{ font-size:13.3px; color:var(--plum); line-height:1.55; }
+.report-card{ padding:16px 18px; margin-bottom:12px; }
+.report-card .top-row{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap; }
+.report-card .subject{ font-weight:700; font-size:14px; color:var(--plum); }
+.report-card .desc{ font-size:12.8px; color:var(--muted); margin-top:4px; }
+.report-card .tags{ display:flex; gap:6px; flex-wrap:wrap; }
 
 /* ---------- Orders ---------- */
 .tabs{ display:flex; gap:28px; margin-bottom:26px; border-bottom:1px solid var(--line); }

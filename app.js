@@ -11,6 +11,9 @@
   const DATABASE_ID = '6a738d5b0005ae72bac5';
   const FLAVORS_TABLE_ID = 'flavors';
   const ORDERS_TABLE_ID = 'orders';
+  const REPORTS_TABLE_ID = 'reports'; // NUEVO: crea esta tabla en Appwrite con columnas:
+  // subject (string), description (string), category (string), severity (string),
+  // status (string), userEmail (string), aiResponse (string)
   const IMAGES_BUCKET_ID = '6a73d7950004768d13dd';
 
   const projectReady = !APPWRITE_PROJECT_ID.startsWith('<') && !!window.Appwrite;
@@ -96,6 +99,41 @@
     if(!appwriteReady) return null;
     try{ return await tablesDB.updateRow(DATABASE_ID, ORDERS_TABLE_ID, id, data); }
     catch(e){ toast('No se pudo actualizar el pedido en Appwrite: ' + e.message); return null; }
+  }
+
+  // ---- Reportes de fallas: persistencia en Appwrite (tabla "reports") ----
+  async function loadReportsFromAppwrite(){
+    if(!appwriteReady) return;
+    try{
+      const res = await tablesDB.listRows(DATABASE_ID, REPORTS_TABLE_ID, [
+        Appwrite.Query.orderDesc('$createdAt'),
+        Appwrite.Query.limit(200),
+      ]);
+      S.reports = res.rows.map(row => ({
+        id: row.$id,
+        createdAt: row.$createdAt,
+        subject: row.subject,
+        description: row.description,
+        category: row.category,
+        severity: row.severity,
+        status: row.status,
+        userEmail: row.userEmail || '',
+        aiResponse: row.aiResponse || '',
+      }));
+    }catch(e){
+      // Lo más probable si esto falla es que la tabla "reports" todavía no existe en Appwrite.
+      console.warn('No se pudieron cargar los reportes desde Appwrite (¿ya creaste la tabla "reports"?):', e.message);
+    }
+  }
+  async function createReportRow(data){
+    if(!appwriteReady) return null;
+    try{ return await tablesDB.createRow(DATABASE_ID, REPORTS_TABLE_ID, Appwrite.ID.unique(), data); }
+    catch(e){ console.warn('No se pudo guardar el reporte en Appwrite (¿ya creaste la tabla "reports"?):', e.message); return null; }
+  }
+  async function updateReportRow(id, data){
+    if(!appwriteReady) return null;
+    try{ return await tablesDB.updateRow(DATABASE_ID, REPORTS_TABLE_ID, id, data); }
+    catch(e){ toast('No se pudo actualizar el reporte en Appwrite: ' + e.message); return null; }
   }
 
   // Sube el archivo elegido en el formulario de admin al bucket de imágenes.
@@ -186,6 +224,7 @@
     user: null,
     cart: [],
     orders: [],
+    reports: [],
     activeCategory: 'Todos',
     orderTab: 'Todos',
     selectedFlavorId: FLAVORS[0].id,
@@ -202,7 +241,52 @@
     flavorFormError: '',
     notifOpen: false,
     lastLowStockKey: null,
+    showReportForm: false,
+    reportFormError: '',
+    lastReportReply: null,
+    adminSupportTab: 'Todos',
   };
+
+  // ---------------- AGENTE DE REPORTES (IA de triage) ----------------
+  // Nota: este es un agente basado en reglas (palabras clave) que corre 100% en el
+  // navegador — no hay una llamada a un modelo de lenguaje real, porque este proyecto
+  // no tiene backend propio donde guardar una API key de forma segura. Categoriza el
+  // reporte, le asigna severidad, y da una primera respuesta automática al usuario,
+  // igual que haría un agente de soporte de primer nivel. Los reportes que no puede
+  // resolver solo, los deja "Escalado" para que el equipo humano los revise.
+  const REPORT_CATEGORIES = {
+    Pago: /pago|tarjeta|cobr|transferen|efectivo|no.{0,15}proces(o|ó|a)|rechaz/i,
+    Pedido: /pedido|orden|entrega|env[ií]o|no lleg|tard[óo]|domicilio|repartidor/i,
+    Cuenta: /contraseñ|cuenta|inicio de sesi[oó]n|iniciar sesi[oó]n|login|registrar|correo/i,
+    Técnico: /error|bug|falla|se cierra|crash|no carga|no abre|pantalla en blanco|congela|lento|no funciona|se traba/i,
+  };
+  const REPORT_URGENT = /urgente|perd[ií].{0,10}dinero|me cobraron.{0,15}(dos veces|doble)|no puedo (comprar|pagar|entrar)|se cerr[oó] todo|nada funciona/i;
+
+  function classifyReportCategory(text){
+    for(const cat in REPORT_CATEGORIES){
+      if(REPORT_CATEGORIES[cat].test(text)) return cat;
+    }
+    return 'General';
+  }
+
+  function analyzeReport(subject, description){
+    const text = `${subject} ${description}`.toLowerCase();
+    const category = classifyReportCategory(text);
+    const severity = REPORT_URGENT.test(text) ? 'Alta' : (category === 'General' ? 'Baja' : 'Media');
+
+    const tips = {
+      Pago: 'Revisa que los datos de tu tarjeta o transferencia estén correctos e intenta de nuevo. Si ya te cobraron pero el pedido no se registró, no te preocupes: lo marcamos como urgente para que el equipo lo revise y te contacte.',
+      Pedido: 'Puedes ver el estado actualizado de tu pedido en "Mis pedidos", dentro de tu perfil. Si el tiempo de entrega ya se pasó por mucho, nuestro equipo va a revisar tu caso directamente.',
+      Cuenta: 'Intenta cerrar sesión y volver a entrar, y verifica que tu correo esté bien escrito. Si sigues sin poder entrar, nuestro equipo puede ayudarte a recuperar el acceso.',
+      Técnico: 'Intenta recargar la página o revisa tu conexión a internet; muchas veces eso lo resuelve. Si el problema sigue apareciendo, ya quedó registrado para que el equipo lo revise a fondo.',
+      General: 'Gracias por avisarnos. Tu reporte ya quedó registrado y nuestro equipo lo va a revisar pronto.',
+    };
+
+    const status = severity === 'Alta' ? 'Escalado' : 'Resuelto por IA';
+    const response = `He clasificado tu reporte como "${category}" con prioridad ${severity.toLowerCase()}. ${tips[category]}`;
+
+    return { category, severity, status, response };
+  }
 
   function money(n){ return '$' + n.toFixed(2); }
 
@@ -656,7 +740,7 @@
       {icon:I.receipt, label:'Mis pedidos', action:'orders'},
       {icon:I.card, label:'Métodos de pago'},
       {icon:I.settings, label:'Ajustes'},
-      {icon:I.help, label:'Centro de ayuda'},
+      {icon:I.help, label:'Centro de ayuda', action:'help'},
       {icon:I.info, label:'Acerca de'},
     ];
     const myOrders = S.orders.filter(o => !S.user?.email || o.userEmail === S.user.email);
@@ -727,6 +811,73 @@
     </div>`;
   }
 
+  function viewHelp(){
+    const faqs = [
+      { q:'¿Cuáles son sus horarios?', a:'Abrimos todos los días de 10:00 a.m. a 9:00 p.m., ¡incluso festivos!' },
+      { q:'¿Hacen envíos a domicilio?', a:'Sí, en un radio de 5 km. El envío cuesta $3.00 y llega en 25-40 minutos aprox.' },
+      { q:'¿Qué formas de pago aceptan?', a:'Tarjeta de crédito/débito en línea, efectivo y transferencia.' },
+      { q:'¿Cómo hago un pedido?', a:'Inicia sesión, elige tus sabores en el Menú, agrégalos al carrito y confirma el pago.' },
+    ];
+    const statusClass = { 'Escalado':'cancelled', 'Resuelto por IA':'delivered', 'En revisión':'processing' };
+    const myReports = S.reports.filter(r => !S.user?.email || r.userEmail === S.user.email);
+    return `
+    ${navbar('profile')}
+    <div class="page-content">
+      <div class="container" style="max-width:820px;">
+        <span class="back-link" data-goto="profile">${I.back} Volver a mi perfil</span>
+        <h2 style="font-size:26px; margin-bottom:6px;">Centro de ayuda</h2>
+        <p class="muted" style="margin-bottom:24px;">Encuentra respuestas rápidas o repórtanos un problema — nuestro agente lo revisa al instante.</p>
+
+        <div class="faq-grid">
+          ${faqs.map(f => `<div class="card faq-card"><div class="q">${f.q}</div><div class="a">${f.a}</div></div>`).join('')}
+        </div>
+
+        <div class="card" style="margin-top:24px;">
+          <div class="toolbar">
+            <h3 style="font-size:15.5px;">¿Algo no está funcionando bien?</h3>
+            ${!S.showReportForm ? `<button class="btn btn-primary" id="open-report-form">Reportar un problema</button>` : ''}
+          </div>
+          ${S.showReportForm ? `
+          <div style="margin-top:14px;">
+            <div class="field"><label>Asunto</label><input type="text" id="rp-subject" placeholder="Ej. No puedo pagar mi pedido"></div>
+            <div class="field"><label>Cuéntanos qué pasó</label><textarea id="rp-desc" placeholder="Describe el problema con el mayor detalle posible..."></textarea></div>
+            ${S.reportFormError ? `<div class="error-text">${S.reportFormError}</div>` : ''}
+            <div class="row">
+              <button class="btn btn-primary" id="submit-report">Enviar reporte</button>
+              <button class="btn btn-outline" id="cancel-report">Cancelar</button>
+            </div>
+            <p class="muted" style="font-size:11.5px; margin-top:10px;">Un agente automático revisa tu reporte al momento; si necesita atención humana, lo marcamos como prioritario para el equipo.</p>
+          </div>` : ''}
+
+          ${S.lastReportReply ? `
+          <div class="agent-reply">
+            <div class="badge-ico">🤖</div>
+            <div class="body">
+              <div class="title">Respuesta del agente</div>
+              <div class="text">${S.lastReportReply}</div>
+            </div>
+          </div>` : ''}
+        </div>
+
+        <h3 style="font-size:15.5px; margin:28px 0 14px;">Tus reportes anteriores</h3>
+        ${myReports.length === 0 ? `<p class="muted">Todavía no has reportado nada. ¡Qué bien! 🍨</p>` : myReports.map(r => `
+          <div class="card report-card">
+            <div class="top-row">
+              <div>
+                <div class="subject">${r.subject}</div>
+                <div class="desc">${r.description}</div>
+              </div>
+              <div class="tags">
+                <span class="stock-badge ${r.severity==='Alta'?'out':r.severity==='Media'?'low':'ok'}">${r.severity}</span>
+                <span class="order-status ${statusClass[r.status]||'processing'}">${r.status}</span>
+              </div>
+            </div>
+            ${r.aiResponse ? `<div class="agent-reply" style="margin-top:12px;"><div class="badge-ico">🤖</div><div class="body"><div class="title">${r.category}</div><div class="text">${r.aiResponse}</div></div></div>` : ''}
+          </div>`).join('')}
+      </div>
+    </div>`;
+  }
+
   function viewAdmin(){
     const f = S.editingFlavor;
     const rows = FLAVORS.map(fl => `
@@ -776,6 +927,23 @@
         <td><span class="order-status ${o.statusLabel==='Entregado'?'delivered':o.statusLabel==='Cancelado'?'cancelled':'processing'}">${o.statusLabel}</span></td>
       </tr>`).join('') : `<tr><td colspan="6" class="muted" style="text-align:center; padding:24px;">Todavía no hay pedidos esta semana.</td></tr>`;
 
+    // ---- Bandeja de soporte (reportes de usuarios) ----
+    const SUPPORT_TABS = ['Todos','Escalado','Resuelto por IA'];
+    const filteredReports = S.reports.filter(r => S.adminSupportTab==='Todos' || r.status===S.adminSupportTab);
+    const supportRows = filteredReports.length ? filteredReports.map(r => `
+      <tr>
+        <td><b>${r.subject}</b><div class="muted" style="font-size:11.5px; margin-top:2px;">${r.description}</div></td>
+        <td class="muted">${r.category}</td>
+        <td><span class="stock-badge ${r.severity==='Alta'?'out':r.severity==='Media'?'low':'ok'}">${r.severity}</span></td>
+        <td class="muted" style="font-size:12px;">${r.userEmail || '—'}</td>
+        <td style="font-size:12px; max-width:260px;">${r.aiResponse}</td>
+        <td>
+          <select class="status-select status-${(r.status||'Escalado').toLowerCase().replace(/\s+/g,'-')}" data-report-status="${r.id}">
+            ${['Escalado','En revisión','Resuelto por IA'].map(s => `<option value="${s}" ${r.status===s?'selected':''}>${s}</option>`).join('')}
+          </select>
+        </td>
+      </tr>`).join('') : `<tr><td colspan="6" class="muted" style="text-align:center; padding:24px;">${S.reports.length ? 'No hay reportes con este estado.' : 'Todavía no hay reportes de usuarios.'}</td></tr>`;
+
     return `
     ${navbar('admin')}
     <div class="page-content">
@@ -786,6 +954,7 @@
           <div class="tab ${S.adminTab==='sabores'?'active':''}" data-admintab="sabores">Sabores</div>
           <div class="tab ${S.adminTab==='pedidos'?'active':''}" data-admintab="pedidos">Pedidos</div>
           <div class="tab ${S.adminTab==='reportes'?'active':''}" data-admintab="reportes">Reportes</div>
+          <div class="tab ${S.adminTab==='soporte'?'active':''}" data-admintab="soporte">Soporte${S.reports.filter(r=>r.status==='Escalado').length ? ` (${S.reports.filter(r=>r.status==='Escalado').length})` : ''}</div>
         </div>
 
         ${S.adminTab === 'sabores' ? `
@@ -846,7 +1015,7 @@
               <tbody>${ordersRows}</tbody>
             </table>
           </div>
-        ` : `
+        ` : S.adminTab === 'reportes' ? `
           <div class="report-head" style="margin-top:20px;">
             <div>
               <h3 style="font-size:15.5px;">Reporte de la semana</h3>
@@ -881,6 +1050,18 @@
               <tbody>${weekRows}</tbody>
             </table>
           </div>
+        ` : `
+          <div class="card" style="margin-top:20px;">
+            <h3 style="font-size:15.5px; margin-bottom:16px;">Reportes de usuarios (${S.reports.length})</h3>
+            <p class="muted" style="font-size:12.5px; margin-bottom:14px;">El agente automático ya clasificó y respondió cada uno. Los marcados "Escalado" necesitan que el equipo los revise.</p>
+            <div class="tabs" style="margin-bottom:6px;">
+              ${SUPPORT_TABS.map(t => `<div class="tab ${S.adminSupportTab===t?'active':''}" data-supporttab="${t}">${t}</div>`).join('')}
+            </div>
+            <table>
+              <thead><tr><th>Asunto</th><th>Categoría</th><th>Severidad</th><th>Usuario</th><th>Respuesta del agente</th><th>Estado</th></tr></thead>
+              <tbody>${supportRows}</tbody>
+            </table>
+          </div>
         `}
       </div>
     </div>`;
@@ -900,6 +1081,7 @@
       case 'cart': html = viewCart(); break;
       case 'profile': html = viewProfile(); break;
       case 'orders': html = viewOrders(); break;
+      case 'help': html = viewHelp(); break;
       case 'admin':
         if(isAdmin()){ html = viewAdmin(); }
         else { S.view = 'home'; toast('No tienes permisos para ver el panel de administrador.'); html = viewHome(); }
@@ -1085,6 +1267,50 @@
       el.addEventListener('click', () => { S.orderTab = el.dataset.ordertab; render(); });
     });
 
+    // ---------- Centro de ayuda: reportes ----------
+    const openReportBtn = document.getElementById('open-report-form');
+    if(openReportBtn) openReportBtn.addEventListener('click', () => {
+      S.showReportForm = true; S.reportFormError = ''; render();
+    });
+
+    const cancelReportBtn = document.getElementById('cancel-report');
+    if(cancelReportBtn) cancelReportBtn.addEventListener('click', () => {
+      S.showReportForm = false; S.reportFormError = ''; render();
+    });
+
+    const submitReportBtn = document.getElementById('submit-report');
+    if(submitReportBtn) submitReportBtn.addEventListener('click', async () => {
+      const subject = document.getElementById('rp-subject').value.trim();
+      const description = document.getElementById('rp-desc').value.trim();
+      if(!subject || !description){
+        S.reportFormError = 'Cuéntanos el asunto y describe qué pasó para poder ayudarte.';
+        render();
+        return;
+      }
+      S.reportFormError = '';
+
+      // El agente clasifica el reporte y genera una primera respuesta al instante.
+      const analysis = analyzeReport(subject, description);
+      const reportData = {
+        subject, description,
+        category: analysis.category,
+        severity: analysis.severity,
+        status: analysis.status,
+        userEmail: S.user?.email || '',
+        aiResponse: analysis.response,
+      };
+      const savedRow = await createReportRow(reportData);
+      S.reports.unshift({
+        id: savedRow ? savedRow.$id : String(9000 + S.reports.length + 1),
+        createdAt: savedRow ? savedRow.$createdAt : new Date().toISOString(),
+        ...reportData,
+      });
+      S.lastReportReply = analysis.response;
+      S.showReportForm = false;
+      toast('¡Reporte enviado! El agente ya lo revisó.');
+      render();
+    });
+
     const doLogin = document.getElementById('do-login');
     if(doLogin) doLogin.addEventListener('click', async () => {
       const email = document.getElementById('login-email').value.trim();
@@ -1097,6 +1323,7 @@
           const me = await account.get();
           S.user = { name: me.name, email: me.email };
           await loadOrdersFromAppwrite();
+          await loadReportsFromAppwrite();
           goTo('home');
         }catch(e){
           S.loginError = 'Correo o contraseña incorrectos.';
@@ -1155,6 +1382,22 @@
           order.statusLabel = el.value;
           await updateOrderRow(order.id, { statusLabel: el.value });
           toast(`Pedido #${order.id} marcado como ${el.value}.`);
+        }
+        render();
+      });
+    });
+
+    root.querySelectorAll('[data-supporttab]').forEach(el => {
+      el.addEventListener('click', () => { S.adminSupportTab = el.dataset.supporttab; render(); });
+    });
+
+    root.querySelectorAll('[data-report-status]').forEach(el => {
+      el.addEventListener('change', async () => {
+        const rep = S.reports.find(r => r.id === el.dataset.reportStatus);
+        if(rep){
+          rep.status = el.value;
+          await updateReportRow(rep.id, { status: el.value });
+          toast(`Reporte "${rep.subject}" marcado como ${el.value}.`);
         }
         render();
       });
@@ -1395,7 +1638,7 @@
         render();
       }
     });
-    await Promise.all([ restoreSession(), loadFlavorsFromAppwrite(), loadOrdersFromAppwrite() ]);
+    await Promise.all([ restoreSession(), loadFlavorsFromAppwrite(), loadOrdersFromAppwrite(), loadReportsFromAppwrite() ]);
     render();
   }
   init();
