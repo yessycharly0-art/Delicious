@@ -1516,7 +1516,7 @@
     if(/pago|tarjeta|efectivo/.test(t)){
       return { text:'Aceptamos tarjeta de crédito/débito en línea y efectivo contra entrega.' };
     }
-    if(/pedid|orden|comprar|c[oó]mo pido/.test(t)){
+    if(/pedid|pedir|orden|comprar|c[oó]mo pido/.test(t)){
       return { text:'Para pedir: inicia sesión o crea una cuenta, elige tus sabores favoritos en el Menú, agrégalos al carrito ¡y listo! 🛒', quick:['Ver menú'] };
     }
     if(/asesor|humano|persona|ayuda real/.test(t)){
